@@ -31,15 +31,15 @@ Out of $3.15M in transaction fees, $2.85M (90%) was in payments that failed. The
 ## Dashboards
 **Page 1: where the failures are**
 
-![Page 1](dashboards/page1_where_failures_concentrate.png)
+https://github.com/JusticeAnalyst/Failed-Transactions-Analysis-Zion-Tech-Hub-Challenge-/blob/main/page1_where_failures_concentrate.png
 
 **Page 2: the January 2024 spike**
 
-![Page 2](dashboards/page2_january_2024_spike.png)
+https://github.com/JusticeAnalyst/Failed-Transactions-Analysis-Zion-Tech-Hub-Challenge-/blob/main/page2_january_2024_spike.png
 
 **Page 3: recovery and where to act first**
 
-![Page 3](dashboards/page3_recovery_and_actions.png)
+https://github.com/JusticeAnalyst/Failed-Transactions-Analysis-Zion-Tech-Hub-Challenge-/blob/main/page3_recovery_and_actions.png
 
 ## How I built it
 - **Power Query:** cleaned the data, merged the exchange rates on month and currency, and converted fees to USD at the rate on the first day of each month. 231 rows (under 0.5%) are in currencies with no rate in the file. They count in the failure counts but their fees could not be converted.
