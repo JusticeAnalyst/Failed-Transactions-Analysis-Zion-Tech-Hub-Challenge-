@@ -1,0 +1,199 @@
+// CALCULATED COLUMNS
+
+// Fact_Transactions[Avg Ticket USD]
+Avg Ticket USD = DIVIDE ( Fact_Transactions[ValueUSD], Fact_Transactions[total_count] )
+
+// Fact_Transactions[Ticket Band]
+Ticket Band =
+SWITCH ( TRUE (),
+    ISBLANK ( Fact_Transactions[Avg Ticket USD] ), "0. No FX rate",
+    Fact_Transactions[Avg Ticket USD] < 1,   "1. Under $1",
+    Fact_Transactions[Avg Ticket USD] < 5,   "2. $1-5",
+    Fact_Transactions[Avg Ticket USD] < 20,  "3. $5-20",
+    Fact_Transactions[Avg Ticket USD] < 100, "4. $20-100",
+    "5. $100+" )
+
+// Dim_Customer[Lifetime Failed Rev $]
+Lifetime Failed Rev $ = CALCULATE ( SUM ( Fact_Transactions[RevenueUSD] ), Fact_Transactions[status] = "failed" )
+
+// Dim_Customer[Failed Rev Rank]
+Failed Rev Rank = RANKX ( ALL ( Dim_Customer ), Dim_Customer[Lifetime Failed Rev $], , DESC, Dense )
+
+// Dim_Customer[Account Group]
+Account Group = IF ( Dim_Customer[Failed Rev Rank] <= 4, "Top 4 accounts", "All other accounts" )
+
+// MEASURES (create all in a table called _Measures)
+
+// [1 Core KPIs] format: #,##0
+Total Attempts =
+SUM ( Fact_Transactions[total_count] )
+
+// [1 Core KPIs] format: #,##0
+Failed Attempts =
+CALCULATE ( [Total Attempts], Fact_Transactions[status] = "failed" )
+
+// [1 Core KPIs] format: 0.0%
+Failure Rate % =
+DIVIDE ( [Failed Attempts], [Total Attempts] )
+
+// [1 Core KPIs] format: $#,##0
+Total Fee Revenue $ =
+SUM ( Fact_Transactions[RevenueUSD] )
+
+// [1 Core KPIs] format: $#,##0
+Failed Fee Revenue $ =
+CALCULATE ( [Total Fee Revenue $], Fact_Transactions[status] = "failed" )
+
+// [1 Core KPIs] format: $#,##0
+Realised Fee Revenue $ =
+[Total Fee Revenue $] - [Failed Fee Revenue $]
+
+// [1 Core KPIs] format: 0.0%
+Failed Revenue % =
+DIVIDE ( [Failed Fee Revenue $], [Total Fee Revenue $] )
+
+// [1 Core KPIs] format: #,##0
+Customers Affected =
+CALCULATE ( DISTINCTCOUNT ( Fact_Transactions[customer_id] ), Fact_Transactions[status] = "failed" )
+
+// [1 Core KPIs] format: 0.0%
+Share of Attempts % =
+DIVIDE ( [Total Attempts], CALCULATE ( [Total Attempts], ALLSELECTED () ) )
+
+// [1 Core KPIs] format: 0.0%
+Share of Failed Revenue % =
+DIVIDE ( [Failed Fee Revenue $], CALCULATE ( [Failed Fee Revenue $], ALLSELECTED () ) )
+
+// [1 Core KPIs] format: 0.0%
+Failed Rev MoM % =
+VAR _i = MAX ( Dim_Date[MonthIndex] )
+VAR _prev = CALCULATE ( [Failed Fee Revenue $], ALL ( Dim_Date ), Dim_Date[MonthIndex] = _i - 1 )
+RETURN DIVIDE ( [Failed Fee Revenue $] - _prev, _prev )
+
+// [2 Page 1 helpers] format: 0.0%
+Failure Rate % (Ticket Chart) =
+IF ( SELECTEDVALUE ( Fact_Transactions[Ticket Band] ) = "0. No FX rate", BLANK (), [Failure Rate %] )
+
+// [2 Page 1 helpers] format: $#,##0
+Failed Fee Revenue $ (Top 8 Sector) =
+IF ( RANKX ( ALLSELECTED ( Dim_Customer[Sector] ), [Failed Fee Revenue $] ) <= 8,
+    [Failed Fee Revenue $] )
+
+// [3 Page 2 Spike] format: $#,##0
+Top 4 Failed Rev $ =
+CALCULATE ( [Failed Fee Revenue $], Dim_Customer[Account Group] = "Top 4 accounts" )
+
+// [3 Page 2 Spike] format: 0.0%
+Top 4 Share % =
+DIVIDE ( [Top 4 Failed Rev $], [Failed Fee Revenue $] )
+
+// [3 Page 2 Spike] format: 0.0%
+Failed Revenue % (Other Accounts) =
+CALCULATE ( [Failed Revenue %], Dim_Customer[Account Group] = "All other accounts" )
+
+// [3 Page 2 Spike] format: $#,##0
+Spike Month Failed $ =
+CALCULATE ( [Failed Fee Revenue $], ALL ( Dim_Date ), Dim_Date[MonthIndex] = 25 )
+
+// [3 Page 2 Spike] format: $#,##0
+Baseline Failed $ =
+CALCULATE ( [Failed Fee Revenue $], ALL ( Dim_Date ),
+    Dim_Date[MonthIndex] IN { 19, 20, 21, 22, 23, 24 } ) / 6
+
+// [3 Page 2 Spike] format: 0.0x
+Spike Multiple =
+DIVIDE ( [Spike Month Failed $], [Baseline Failed $] )
+
+// [3 Page 2 Spike] format: 0.0%
+Top 4 Spike Share % =
+DIVIDE (
+    CALCULATE ( [Spike Month Failed $], Dim_Customer[Account Group] = "Top 4 accounts" ),
+    [Spike Month Failed $] )
+
+// [3 Page 2 Spike] format: 0.0%
+Other Accounts Failed % (Spike Month) =
+CALCULATE ( [Failed Revenue % (Other Accounts)], ALL ( Dim_Date ), Dim_Date[MonthIndex] = 25 )
+
+// [3 Page 2 Spike] format: $#,##0
+Bridge Value =
+VAR _step = SELECTEDVALUE ( Spike_Bridge[Order] )
+VAR _top = CALCULATE ( [Spike Month Failed $] - [Baseline Failed $], Dim_Customer[Account Group] = "Top 4 accounts" )
+VAR _oth = CALCULATE ( [Spike Month Failed $] - [Baseline Failed $], Dim_Customer[Account Group] = "All other accounts" )
+RETURN SWITCH ( _step, 1, [Baseline Failed $], 2, _top, 3, _oth )
+
+// [3 Page 2 Spike] format: $#,##0
+Failed Fee Revenue $ (Top 10) =
+IF ( SELECTEDVALUE ( Dim_Customer[Failed Rev Rank] ) <= 10, [Failed Fee Revenue $] )
+
+// [3 Page 2 Spike] format: 0.0%
+Top 10 Share % =
+IF ( SELECTEDVALUE ( Dim_Customer[Failed Rev Rank] ) <= 10,
+    DIVIDE ( [Failed Fee Revenue $], CALCULATE ( [Failed Fee Revenue $], ALLSELECTED ( Dim_Customer ) ) ) )
+
+// [3 Page 2 Spike] format: 0.0%
+Top 10 Cumulative Share % =
+VAR _r = SELECTEDVALUE ( Dim_Customer[Failed Rev Rank] )
+RETURN IF ( _r <= 10,
+    DIVIDE (
+        CALCULATE ( [Failed Fee Revenue $], FILTER ( ALLSELECTED ( Dim_Customer ), Dim_Customer[Failed Rev Rank] <= _r ) ),
+        CALCULATE ( [Failed Fee Revenue $], ALLSELECTED ( Dim_Customer ) ) ) )
+
+// [4 Page 3 Recovery] format: 0%
+Closure Value =
+SELECTEDVALUE ( Closure[Closure], 0.5 )
+
+// [4 Page 3 Recovery] format: 0.0%
+Benchmark Failed % (Mobile Money) =
+CALCULATE ( [Failed Revenue %], ALL ( Dim_Channel ), Dim_Channel[ChannelGroup] = "Mobile Money",
+    ALL ( Dim_Customer[Account Group] ) )
+
+// [4 Page 3 Recovery] format: $#,##0
+Card Gap $ (All Accounts) =
+VAR _rev = CALCULATE ( [Total Fee Revenue $], Dim_Channel[ChannelGroup] = "Card" )
+VAR _fr  = CALCULATE ( [Failed Revenue %], Dim_Channel[ChannelGroup] = "Card" )
+RETURN _rev * MAX ( 0, _fr - [Benchmark Failed % (Mobile Money)] )
+
+// [4 Page 3 Recovery] format: $#,##0
+Card Gap $ (Excl. Top 4) =
+VAR _rev = CALCULATE ( [Total Fee Revenue $], Dim_Channel[ChannelGroup] = "Card",
+    Dim_Customer[Account Group] = "All other accounts" )
+VAR _fr  = CALCULATE ( [Failed Revenue %], Dim_Channel[ChannelGroup] = "Card",
+    Dim_Customer[Account Group] = "All other accounts" )
+RETURN _rev * MAX ( 0, _fr - [Benchmark Failed % (Mobile Money)] )
+
+// [4 Page 3 Recovery] format: 0.0
+Card vs Benchmark (pp) =
+( CALCULATE ( [Failed Revenue %], Dim_Channel[ChannelGroup] = "Card" ) - [Benchmark Failed % (Mobile Money)] ) * 100
+
+// [4 Page 3 Recovery] format: $#,##0
+Recoverable $ (All Accounts) =
+[Card Gap $ (All Accounts)] * [Closure Value]
+
+// [4 Page 3 Recovery] format: $#,##0
+Recoverable $ (Excl. Top 4) =
+[Card Gap $ (Excl. Top 4)] * [Closure Value]
+
+// [4 Page 3 Recovery] format: $#,##0
+Annualised Recovery $ =
+DIVIDE ( [Recoverable $ (Excl. Top 4)], DISTINCTCOUNT ( Fact_Transactions[period] ) ) * 12
+
+// [4 Page 3 Recovery] format: 0.0%
+Uplift on Realised Revenue % =
+DIVIDE ( [Recoverable $ (Excl. Top 4)], [Realised Fee Revenue $] )
+
+// [4 Page 3 Recovery] format: $#,##0
+Scenario Recovery $ (All) =
+[Card Gap $ (All Accounts)] * SELECTEDVALUE ( Scenario[Pct] )
+
+// [4 Page 3 Recovery] format: $#,##0
+Scenario Recovery $ (Excl.) =
+[Card Gap $ (Excl. Top 4)] * SELECTEDVALUE ( Scenario[Pct] )
+
+// [4 Page 3 Recovery] format: $#,##0
+Funnel Value =
+SWITCH ( SELECTEDVALUE ( Recovery_Funnel[Order] ),
+    1, [Failed Fee Revenue $],
+    2, CALCULATE ( [Failed Fee Revenue $], Dim_Channel[ChannelGroup] = "Card" ),
+    3, [Card Gap $ (All Accounts)],
+    4, [Card Gap $ (Excl. Top 4)],
+    5, [Recoverable $ (Excl. Top 4)] )
